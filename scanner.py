@@ -12,7 +12,7 @@ KEYWORDS = [
     "graduate", "college graduate", "entry level", "junior", "ncg"
 ]
 
-# חברות Workday מעודכנות עם הנתיבים הפנימיים המדויקים
+# חברות Workday מעודכנות
 WORKDAY_COMPANIES = [
     ("NVIDIA", "nvidia.wd5", "nvidia", "NVIDIAExternalCareerSite"),
     ("Intel", "intel.wd1", "intel", "External"),
@@ -21,8 +21,7 @@ WORKDAY_COMPANIES = [
     ("KLA", "kla.wd1", "kla", "Search"),
     ("Cadence", "cadence.wd1", "cadence", "External_Careers"),
     ("Microchip", "microchiphr.wd5", "microchiphr", "external"),
-    ("AMD", "amd.wd1", "amd", "AMD_Careers"),
-    ("Nova", "novaltd.wd1", "novaltd", "Nova_Careers")
+    ("AMD", "amd.wd1", "amd", "AMD_External_Careers")
 ]
 
 # חברות שבבים ו-Fabless ב-Greenhouse
@@ -35,6 +34,11 @@ GREENHOUSE_COMPANIES = [
 # חברות ב-Lever
 LEVER_COMPANIES = [
     "valens", "arbe"
+]
+
+# חברות ב-Comeet
+COMEET_COMPANIES = [
+    ("Nova", "nova")
 ]
 
 HEADERS = {
@@ -77,7 +81,7 @@ def send_telegram_message(message: str):
 
 def scan_workday(company_name: str, tenant: str, slug: str, site: str):
     url = f"https://{tenant}.myworkdayjobs.com/wday/cxs/{slug}/{site}/jobs"
-    payload = {"appliedFacets": {}, "limit": 20, "offset": 0, "searchText": "Israel"}
+    payload = {"appliedFacets": {}, "limit": 100, "offset": 0, "searchText": "Israel"}
     matches = []
     try:
         response = requests.post(url, json=payload, headers=HEADERS, timeout=10)
@@ -88,7 +92,7 @@ def scan_workday(company_name: str, tenant: str, slug: str, site: str):
                 title_lower = title.lower()
                 locations_text = job.get("locationsText", "").lower()
                 
-                is_israel = any(loc in locations_text for loc in ["israel", "haifa", "tel aviv", "beer", "yokneam", "petah", "jerusalem"])
+                is_israel = any(loc in locations_text for loc in ["israel", "haifa", "tel aviv", "beer", "yokneam", "petah", "jerusalem", "rehovot", "gat"])
                 if is_israel or not locations_text:
                     if any(kw in title_lower for kw in KEYWORDS):
                         job_path = job.get("externalPath", "")
@@ -109,7 +113,7 @@ def scan_workday(company_name: str, tenant: str, slug: str, site: str):
         return [], False
 
 def scan_amazon():
-    url = "https://www.amazon.jobs/en/search.json?country=ISR&base_query=student&result_limit=20"
+    url = "https://www.amazon.jobs/en/search.json?country=ISR&base_query=student&result_limit=50"
     matches = []
     try:
         response = requests.get(url, headers={"User-Agent": HEADERS["User-Agent"]}, timeout=10)
@@ -132,6 +136,30 @@ def scan_amazon():
         print(f"[Amazon] Error {e}")
         return [], False
 
+def scan_apple():
+    url = "https://jobs.apple.com/api/v1/search/jobs?location=israel-ISR&sort=newest"
+    matches = []
+    try:
+        response = requests.get(url, headers={"User-Agent": HEADERS["User-Agent"]}, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            for job in data.get("searchResults", []):
+                title = job.get("postingTitle", "")
+                if any(kw in title.lower() for kw in KEYWORDS):
+                    job_id = job.get("id")
+                    matches.append({
+                        "company": "Apple",
+                        "title": title,
+                        "url": f"https://jobs.apple.com/he-il/details/{job_id}",
+                        "location": job.get("locations", [{}])[0].get("name", "Israel")
+                    })
+            print(f"[Apple] Found {len(matches)} matching positions.")
+            return matches, True
+        return [], False
+    except Exception as e:
+        print(f"[Apple] Error {e}")
+        return [], False
+
 def scan_greenhouse(company: str):
     url = f"https://boards-api.greenhouse.io/v1/boards/{company}/jobs"
     matches = []
@@ -142,7 +170,7 @@ def scan_greenhouse(company: str):
             for job in data.get("jobs", []):
                 title = job.get("title", "")
                 loc_name = job.get("location", {}).get("name", "").lower()
-                is_israel = any(loc in loc_name for loc in ["israel", "tel aviv", "haifa", "beer"]) or not loc_name
+                is_israel = any(loc in loc_name for loc in ["israel", "tel aviv", "haifa", "beer", "rehovot", "yokneam"]) or not loc_name
                 
                 if is_israel and any(kw in title.lower() for kw in KEYWORDS):
                     matches.append({
@@ -168,7 +196,7 @@ def scan_lever(company: str):
             for job in jobs:
                 title = job.get("text", "")
                 loc = job.get("categories", {}).get("location", "").lower()
-                is_israel = any(l in loc for l in ["israel", "tel aviv"]) or not loc
+                is_israel = any(l in loc for l in ["israel", "tel aviv", "haifa"]) or not loc
                 
                 if is_israel and any(kw in title.lower() for kw in KEYWORDS):
                     matches.append({
@@ -184,12 +212,37 @@ def scan_lever(company: str):
         print(f"[Lever] {company}: Error {e}")
         return [], False
 
+def scan_comeet(company_name: str, company_uid: str):
+    url = f"https://www.comeet.com/careers-api/2.0/company/{company_uid}/positions"
+    matches = []
+    try:
+        response = requests.get(url, headers={"User-Agent": HEADERS["User-Agent"]}, timeout=10)
+        if response.status_code == 200:
+            positions = response.json()
+            for pos in positions:
+                title = pos.get("name", "")
+                loc = pos.get("location", {}).get("country", "").lower()
+                if "israel" in loc or not loc:
+                    if any(kw in title.lower() for kw in KEYWORDS):
+                        matches.append({
+                            "company": company_name,
+                            "title": title,
+                            "url": pos.get("url_active_page", ""),
+                            "location": pos.get("location", {}).get("city", "Israel")
+                        })
+            print(f"[Comeet] {company_name}: Found {len(matches)} matching positions.")
+            return matches, True
+        return [], False
+    except Exception as e:
+        print(f"[Comeet] {company_name}: Error {e}")
+        return [], False
+
 def main():
     print("Starting hardware & semiconductor job scan...")
     seen_urls = load_seen_jobs()
     all_current_jobs = []
     success_count = 0
-    total = len(WORKDAY_COMPANIES) + len(GREENHOUSE_COMPANIES) + len(LEVER_COMPANIES) + 1
+    total = len(WORKDAY_COMPANIES) + len(GREENHOUSE_COMPANIES) + len(LEVER_COMPANIES) + len(COMEET_COMPANIES) + 2
 
     for comp_name, tenant, slug, site in WORKDAY_COMPANIES:
         jobs, ok = scan_workday(comp_name, tenant, slug, site)
@@ -198,6 +251,10 @@ def main():
         time.sleep(0.1)
 
     jobs, ok = scan_amazon()
+    all_current_jobs.extend(jobs)
+    if ok: success_count += 1
+
+    jobs, ok = scan_apple()
     all_current_jobs.extend(jobs)
     if ok: success_count += 1
 
@@ -213,28 +270,47 @@ def main():
         if ok: success_count += 1
         time.sleep(0.1)
 
+    for comp_name, comp_uid in COMEET_COMPANIES:
+        jobs, ok = scan_comeet(comp_name, comp_uid)
+        all_current_jobs.extend(jobs)
+        if ok: success_count += 1
+        time.sleep(0.1)
+
     new_jobs = [job for job in all_current_jobs if job["url"] not in seen_urls]
-    
+    existing_jobs = [job for job in all_current_jobs if job["url"] in seen_urls]
+
     for job in all_current_jobs:
         seen_urls.add(job["url"])
     save_seen_jobs(seen_urls)
 
     summary = f"\n\n📊 *סיכום סריקה:* נסרקו בהצלחה {success_count}/{total} חברות חומרה ושבבים."
 
-    if not new_jobs:
-        send_telegram_message(f"🔎 *סריקת בוקר חומרה ושבבים:* לא נפתחו משרות סטודנט חדשות מאז הסריקה האחרונה.{summary}")
+    if not all_current_jobs:
+        send_telegram_message(f"🔎 *סריקת בוקר חומרה ושבבים:* לא נמצאו משרות סטודנט פעילות כרגע.{summary}")
         return
 
-    header = f"⚡ *נמצאו {len(new_jobs)} משרות סטודנט בחומרה ושבבים:*\n\n"
-    current_msg = header
-    
-    for job in new_jobs:
-        entry = f"• *{job['company']}* | {job['title']}\n📍 {job['location']}\n🔗 [להגשת מועמדות]({job['url']})\n\n"
-        if len(current_msg) + len(entry) > 3300:
-            send_telegram_message(current_msg)
-            current_msg = ""
-        current_msg += entry
-        
+    current_msg = ""
+
+    if new_jobs:
+        current_msg += f"🔥 *נמצאו {len(new_jobs)} משרות חדשות מהיום:*\n\n"
+        for job in new_jobs:
+            entry = f"🆕 *{job['company']}* | {job['title']}\n📍 {job['location']}\n🔗 [להגשת מועמדות]({job['url']})\n\n"
+            if len(current_msg) + len(entry) > 3300:
+                send_telegram_message(current_msg)
+                current_msg = ""
+            current_msg += entry
+    else:
+        current_msg += "🔎 *לא נפתחו משרות חדשות בסריקה זו.*\n\n"
+
+    if existing_jobs:
+        current_msg += f"📌 *משרות פעילות קודמות ({len(existing_jobs)}):*\n\n"
+        for job in existing_jobs:
+            entry = f"• *{job['company']}* | {job['title']}\n📍 {job['location']}\n🔗 [להגשת מועמדות]({job['url']})\n\n"
+            if len(current_msg) + len(entry) > 3300:
+                send_telegram_message(current_msg)
+                current_msg = ""
+            current_msg += entry
+
     current_msg += summary
     send_telegram_message(current_msg)
 
