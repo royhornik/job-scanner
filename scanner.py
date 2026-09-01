@@ -1,37 +1,38 @@
 import os
 import requests
+import json
 import time
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+SEEN_JOBS_FILE = "seen_jobs.json"
 
 KEYWORDS = [
     "student", "intern", "סטודנט", "internship", 
     "graduate", "college graduate", "entry level", "junior", "ncg"
 ]
 
+# חברות Workday מעודכנות עם הנתיבים הפנימיים המדויקים
 WORKDAY_COMPANIES = [
     ("NVIDIA", "nvidia.wd5", "nvidia", "NVIDIAExternalCareerSite"),
     ("Intel", "intel.wd1", "intel", "External"),
-    ("Qualcomm", "qualcomm.wd5", "qualcomm", "External"),
     ("Marvell", "marvell.wd1", "marvell", "MarvellCareers"),
-    ("Texas Instruments", "ti.wd1", "ti", "TI_Careers"),
     ("Broadcom", "broadcom.wd1", "broadcom", "External_Career"),
-    ("Western Digital", "westerndigital.wd1", "westerndigital", "WDC_External_Careers"),
-    ("Applied Materials", "appliedmaterials.wd1", "appliedmaterials", "Applied_Materials_Careers"),
     ("KLA", "kla.wd1", "kla", "Search"),
-    ("Synopsys", "synopsys.wd1", "synopsys", "External"),
     ("Cadence", "cadence.wd1", "cadence", "External_Careers"),
-    ("Microchip", "microchip.wd5", "microchip", "External"),
-    ("Cisco", "cisco.wd5", "cisco", "Cisco_Jobs")
+    ("Microchip", "microchiphr.wd5", "microchiphr", "external"),
+    ("AMD", "amd.wd1", "amd", "AMD_Careers"),
+    ("Nova", "novaltd.wd1", "novaltd", "Nova_Careers")
 ]
 
+# חברות שבבים ו-Fabless ב-Greenhouse
 GREENHOUSE_COMPANIES = [
     "innoviz", "vayyar", "solaredge", "speedata", "hailo",
     "nextsilicon", "neureality", "pliops", "proteantecs", "ceva",
     "arm", "camtek"
 ]
 
+# חברות ב-Lever
 LEVER_COMPANIES = [
     "valens", "arbe"
 ]
@@ -42,9 +43,25 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
+def load_seen_jobs():
+    if os.path.exists(SEEN_JOBS_FILE):
+        try:
+            with open(SEEN_JOBS_FILE, "r", encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception:
+            return set()
+    return set()
+
+def save_seen_jobs(seen_set):
+    try:
+        with open(SEEN_JOBS_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(seen_set), f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"Error saving seen jobs: {e}")
+
 def send_telegram_message(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print(message)
+        print("Missing Telegram credentials.")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
@@ -56,16 +73,11 @@ def send_telegram_message(message: str):
     try:
         requests.post(url, json=payload, timeout=10)
     except Exception as e:
-        print(f"Failed to send Telegram message: {e}")
+        print(f"Telegram error: {e}")
 
 def scan_workday(company_name: str, tenant: str, slug: str, site: str):
     url = f"https://{tenant}.myworkdayjobs.com/wday/cxs/{slug}/{site}/jobs"
-    payload = {
-        "appliedFacets": {},
-        "limit": 20,
-        "offset": 0,
-        "searchText": "student"
-    }
+    payload = {"appliedFacets": {}, "limit": 20, "offset": 0, "searchText": "Israel"}
     matches = []
     try:
         response = requests.post(url, json=payload, headers=HEADERS, timeout=10)
@@ -76,7 +88,6 @@ def scan_workday(company_name: str, tenant: str, slug: str, site: str):
                 title_lower = title.lower()
                 locations_text = job.get("locationsText", "").lower()
                 
-                # בדיקה שהמשרה בישראל ותואמת מילות מפתח
                 is_israel = any(loc in locations_text for loc in ["israel", "haifa", "tel aviv", "beer", "yokneam", "petah", "jerusalem"])
                 if is_israel or not locations_text:
                     if any(kw in title_lower for kw in KEYWORDS):
@@ -94,7 +105,7 @@ def scan_workday(company_name: str, tenant: str, slug: str, site: str):
             print(f"[Workday] {company_name}: HTTP Error {response.status_code}")
             return [], False
     except Exception as e:
-        print(f"[Workday] {company_name}: Exception {e}")
+        print(f"[Workday] {company_name}: Error {e}")
         return [], False
 
 def scan_amazon():
@@ -118,7 +129,7 @@ def scan_amazon():
         print(f"[Amazon] HTTP Error {response.status_code}")
         return [], False
     except Exception as e:
-        print(f"[Amazon] Exception {e}")
+        print(f"[Amazon] Error {e}")
         return [], False
 
 def scan_greenhouse(company: str):
@@ -144,7 +155,7 @@ def scan_greenhouse(company: str):
             return matches, True
         return [], False
     except Exception as e:
-        print(f"[Greenhouse] {company}: Exception {e}")
+        print(f"[Greenhouse] {company}: Error {e}")
         return [], False
 
 def scan_lever(company: str):
@@ -170,46 +181,54 @@ def scan_lever(company: str):
             return matches, True
         return [], False
     except Exception as e:
-        print(f"[Lever] {company}: Exception {e}")
+        print(f"[Lever] {company}: Error {e}")
         return [], False
 
 def main():
-    all_jobs = []
+    print("Starting hardware & semiconductor job scan...")
+    seen_urls = load_seen_jobs()
+    all_current_jobs = []
     success_count = 0
     total = len(WORKDAY_COMPANIES) + len(GREENHOUSE_COMPANIES) + len(LEVER_COMPANIES) + 1
 
     for comp_name, tenant, slug, site in WORKDAY_COMPANIES:
         jobs, ok = scan_workday(comp_name, tenant, slug, site)
-        all_jobs.extend(jobs)
+        all_current_jobs.extend(jobs)
         if ok: success_count += 1
         time.sleep(0.1)
 
     jobs, ok = scan_amazon()
-    all_jobs.extend(jobs)
+    all_current_jobs.extend(jobs)
     if ok: success_count += 1
 
     for comp in GREENHOUSE_COMPANIES:
         jobs, ok = scan_greenhouse(comp)
-        all_jobs.extend(jobs)
+        all_current_jobs.extend(jobs)
         if ok: success_count += 1
         time.sleep(0.1)
 
     for comp in LEVER_COMPANIES:
         jobs, ok = scan_lever(comp)
-        all_jobs.extend(jobs)
+        all_current_jobs.extend(jobs)
         if ok: success_count += 1
         time.sleep(0.1)
 
+    new_jobs = [job for job in all_current_jobs if job["url"] not in seen_urls]
+    
+    for job in all_current_jobs:
+        seen_urls.add(job["url"])
+    save_seen_jobs(seen_urls)
+
     summary = f"\n\n📊 *סיכום סריקה:* נסרקו בהצלחה {success_count}/{total} חברות חומרה ושבבים."
 
-    if not all_jobs:
-        send_telegram_message(f"🔎 *סריקת בוקר חומרה ושבבים:* לא נמצאו משרות סטודנט פתוחות כרגע.{summary}")
+    if not new_jobs:
+        send_telegram_message(f"🔎 *סריקת בוקר חומרה ושבבים:* לא נפתחו משרות סטודנט חדשות מאז הסריקה האחרונה.{summary}")
         return
 
-    header = f"⚡ *נמצאו {len(all_jobs)} משרות סטודנט בחומרה, שבבים וסיליקון:*\n\n"
+    header = f"⚡ *נמצאו {len(new_jobs)} משרות סטודנט בחומרה ושבבים:*\n\n"
     current_msg = header
     
-    for job in all_jobs:
+    for job in new_jobs:
         entry = f"• *{job['company']}* | {job['title']}\n📍 {job['location']}\n🔗 [להגשת מועמדות]({job['url']})\n\n"
         if len(current_msg) + len(entry) > 3300:
             send_telegram_message(current_msg)
