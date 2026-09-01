@@ -2,8 +2,8 @@ name: Daily Job Scanner
 
 on:
   schedule:
-    # ריצה יומית ב-10:00 בבוקר שעון ישראל
-    - cron: '0 7  * * *'
+    # ריצה יומית אוטומטית ב-10:10 בבוקר (שעון קיץ בישראל)
+    - cron: '10 7 * * *'
   workflow_dispatch:
 
 jobs:
