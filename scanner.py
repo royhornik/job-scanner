@@ -20,8 +20,7 @@ WORKDAY_COMPANIES = [
     ("Broadcom", "broadcom.wd1", "broadcom", "External_Career"),
     ("KLA", "kla.wd1", "kla", "Search"),
     ("Cadence", "cadence.wd1", "cadence", "External_Careers"),
-    ("Microchip", "microchiphr.wd5", "microchiphr", "external"),
-    ("AMD", "amd.wd1", "amd", "AMD_External_Careers")
+    ("Microchip", "microchiphr.wd5", "microchiphr", "external")
 ]
 
 # חברות שבבים ו-Fabless ב-Greenhouse
@@ -81,7 +80,8 @@ def send_telegram_message(message: str):
 
 def scan_workday(company_name: str, tenant: str, slug: str, site: str):
     url = f"https://{tenant}.myworkdayjobs.com/wday/cxs/{slug}/{site}/jobs"
-    payload = {"appliedFacets": {}, "limit": 100, "offset": 0, "searchText": "Israel"}
+    # מגבלה מקסימלית תקינה ב-Workday API היא 20
+    payload = {"appliedFacets": {}, "limit": 20, "offset": 0, "searchText": "Israel"}
     matches = []
     try:
         response = requests.post(url, json=payload, headers=HEADERS, timeout=10)
