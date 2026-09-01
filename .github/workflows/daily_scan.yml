@@ -2,9 +2,12 @@ name: Daily Job Scanner
 
 on:
   schedule:
-    # ריצה יומית אוטומטית ב-10:10 בבוקר (שעון קיץ בישראל)
+    # ריצה יומית ב-10:10 בבוקר (שעון קיץ בישראל)
     - cron: '10 7 * * *'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   scan:
@@ -26,3 +29,10 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python scanner.py
+
+      - name: Commit and push updated seen jobs
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add seen_jobs.json
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update seen jobs [skip ci]" && git push)
