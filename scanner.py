@@ -12,7 +12,6 @@ KEYWORDS = [
     "graduate", "college graduate", "entry level", "junior", "ncg"
 ]
 
-# חברות Workday תקינות
 WORKDAY_COMPANIES = [
     ("NVIDIA", "nvidia.wd5", "nvidia", "NVIDIAExternalCareerSite"),
     ("Intel", "intel.wd1", "intel", "External"),
@@ -23,19 +22,16 @@ WORKDAY_COMPANIES = [
     ("Microchip", "microchiphr.wd5", "microchiphr", "external")
 ]
 
-# חברות שבבים ו-Fabless ב-Greenhouse
 GREENHOUSE_COMPANIES = [
     "innoviz", "vayyar", "solaredge", "speedata", "hailo",
     "nextsilicon", "neureality", "pliops", "proteantecs", "ceva",
     "arm", "camtek"
 ]
 
-# חברות ב-Lever
 LEVER_COMPANIES = [
     "valens", "arbe"
 ]
 
-# חברות ב-Comeet
 COMEET_COMPANIES = [
     ("Nova", "nova")
 ]
@@ -80,21 +76,28 @@ def send_telegram_message(message: str):
 
 def scan_workday(company_name: str, tenant: str, slug: str, site: str):
     url = f"https://{tenant}.myworkdayjobs.com/wday/cxs/{slug}/{site}/jobs"
-    payload = {"appliedFacets": {}, "limit": 20, "offset": 0, "searchText": "Israel"}
     matches = []
-    try:
-        response = requests.post(url, json=payload, headers=HEADERS, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            for job in data.get("jobPostings", []):
-                title = job.get("title", "")
-                title_lower = title.lower()
-                locations_text = job.get("locationsText", "").lower()
-                
-                is_israel = any(loc in locations_text for loc in ["israel", "haifa", "tel aviv", "beer", "yokneam", "petah", "jerusalem", "rehovot", "gat"])
-                if is_israel or not locations_text:
-                    if any(kw in title_lower for kw in KEYWORDS):
-                        job_path = job.get("externalPath", "")
+    seen_ids = set()
+    
+    # חיפוש משולב: קודם לפי student בישראל, ואז בדיקה רחבה
+    for query in ["student Israel", "intern Israel", "Israel"]:
+        payload = {"appliedFacets": {}, "limit": 20, "offset": 0, "searchText": query}
+        try:
+            response = requests.post(url, json=payload, headers=HEADERS, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                for job in data.get("jobPostings", []):
+                    job_path = job.get("externalPath", "")
+                    if job_path in seen_ids:
+                        continue
+                    
+                    title = job.get("title", "")
+                    title_lower = title.lower()
+                    locations_text = job.get("locationsText", "").lower()
+                    
+                    is_israel = any(loc in locations_text for loc in ["israel", "haifa", "tel aviv", "beer", "yokneam", "petah", "jerusalem", "rehovot", "gat"])
+                    if (is_israel or not locations_text) and any(kw in title_lower for kw in KEYWORDS):
+                        seen_ids.add(job_path)
                         full_url = f"https://{tenant}.myworkdayjobs.com/en-US/{site}{job_path}"
                         matches.append({
                             "company": company_name,
@@ -102,14 +105,11 @@ def scan_workday(company_name: str, tenant: str, slug: str, site: str):
                             "url": full_url,
                             "location": job.get("locationsText", "Israel")
                         })
-            print(f"[Workday] {company_name}: Found {len(matches)} matching positions.")
-            return matches, True
-        else:
-            print(f"[Workday] {company_name}: HTTP Error {response.status_code}")
-            return [], False
-    except Exception as e:
-        print(f"[Workday] {company_name}: Error {e}")
-        return [], False
+        except Exception as e:
+            print(f"[Workday] {company_name} query '{query}' error: {e}")
+            
+    print(f"[Workday] {company_name}: Found {len(matches)} matching positions.")
+    return matches, True
 
 def scan_amazon():
     url = "https://www.amazon.jobs/en/search.json?country=ISR&base_query=student&result_limit=50"
@@ -129,64 +129,10 @@ def scan_amazon():
                     })
             print(f"[Amazon] Found {len(matches)} matching positions.")
             return matches, True
+        print(f"[Amazon] HTTP Error {response.status_code}")
         return [], False
     except Exception as e:
         print(f"[Amazon] Error {e}")
-        return [], False
-
-def scan_ti():
-    """סריקה ישירה של פורטל Texas Instruments בישראל"""
-    url = "https://careers.ti.com/api/jobs?location=Israel&keywords=student"
-    matches = []
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            jobs_list = data.get("jobs", [])
-            for item in jobs_list:
-                job_data = item.get("data", {})
-                title = job_data.get("title", "")
-                if any(kw in title.lower() for kw in KEYWORDS):
-                    apply_url = job_data.get("apply_url") or job_data.get("meta_url") or "https://careers.ti.com"
-                    matches.append({
-                        "company": "Texas Instruments",
-                        "title": title,
-                        "url": apply_url,
-                        "location": job_data.get("city", "Ra'anana, Israel")
-                    })
-            print(f"[TI] Found {len(matches)} matching positions.")
-            return matches, True
-        print(f"[TI] HTTP Error {response.status_code}")
-        return [], False
-    except Exception as e:
-        print(f"[TI] Error: {e}")
-        return [], False
-
-def scan_cisco():
-    """סריקה ישירה של משרות Cisco בישראל"""
-    url = "https://jobs.cisco.com/api/v1/jobs?country=Israel&limit=30"
-    matches = []
-    try:
-        response = requests.get(url, headers=HEADERS, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            jobs = data.get("jobs", []) if isinstance(data, dict) else []
-            for j in jobs:
-                job_info = j.get("data", j)
-                title = job_info.get("title", "")
-                if any(kw in title.lower() for kw in KEYWORDS):
-                    matches.append({
-                        "company": "Cisco",
-                        "title": title,
-                        "url": job_info.get("url") or f"https://jobs.cisco.com/jobs/SearchJobs/{job_info.get('id', '')}",
-                        "location": job_info.get("location", "Israel")
-                    })
-            print(f"[Cisco] Found {len(matches)} matching positions.")
-            return matches, True
-        print(f"[Cisco] HTTP Error {response.status_code}")
-        return [], False
-    except Exception as e:
-        print(f"[Cisco] Error: {e}")
         return [], False
 
 def scan_apple():
@@ -295,57 +241,40 @@ def main():
     seen_urls = load_seen_jobs()
     all_current_jobs = []
     success_count = 0
-    total = len(WORKDAY_COMPANIES) + len(GREENHOUSE_COMPANIES) + len(LEVER_COMPANIES) + len(COMEET_COMPANIES) + 4
+    total = len(WORKDAY_COMPANIES) + len(GREENHOUSE_COMPANIES) + len(LEVER_COMPANIES) + len(COMEET_COMPANIES) + 2
 
-    # 1. Workday
     for comp_name, tenant, slug, site in WORKDAY_COMPANIES:
         jobs, ok = scan_workday(comp_name, tenant, slug, site)
         all_current_jobs.extend(jobs)
         if ok: success_count += 1
         time.sleep(0.1)
 
-    # 2. Amazon
     jobs, ok = scan_amazon()
     all_current_jobs.extend(jobs)
     if ok: success_count += 1
 
-    # 3. Texas Instruments (חדש)
-    jobs, ok = scan_ti()
-    all_current_jobs.extend(jobs)
-    if ok: success_count += 1
-
-    # 4. Cisco (חדש)
-    jobs, ok = scan_cisco()
-    all_current_jobs.extend(jobs)
-    if ok: success_count += 1
-
-    # 5. Apple
     jobs, ok = scan_apple()
     all_current_jobs.extend(jobs)
     if ok: success_count += 1
 
-    # 6. Greenhouse
     for comp in GREENHOUSE_COMPANIES:
         jobs, ok = scan_greenhouse(comp)
         all_current_jobs.extend(jobs)
         if ok: success_count += 1
         time.sleep(0.1)
 
-    # 7. Lever
     for comp in LEVER_COMPANIES:
         jobs, ok = scan_lever(comp)
         all_current_jobs.extend(jobs)
         if ok: success_count += 1
         time.sleep(0.1)
 
-    # 8. Comeet
     for comp_name, comp_uid in COMEET_COMPANIES:
         jobs, ok = scan_comeet(comp_name, comp_uid)
         all_current_jobs.extend(jobs)
         if ok: success_count += 1
         time.sleep(0.1)
 
-    # פיצול משרות חדשות מול קודמות
     new_jobs = [job for job in all_current_jobs if job["url"] not in seen_urls]
     existing_jobs = [job for job in all_current_jobs if job["url"] in seen_urls]
 
