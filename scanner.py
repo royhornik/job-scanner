@@ -18,23 +18,19 @@ WORKDAY_COMPANIES = [
     ("Marvell", "marvell.wd1", "marvell", "MarvellCareers"),
     ("Broadcom", "broadcom.wd1", "broadcom", "External_Career"),
     ("KLA", "kla.wd1", "kla", "Search"),
-    ("Cadence", "cadence.wd1", "cadence", "External_Careers"),
     ("Microchip", "microchiphr.wd5", "microchiphr", "external")
 ]
 
 GREENHOUSE_COMPANIES = [
-    "innoviz", "vayyar", "solaredge", "speedata", "hailo",
-    "nextsilicon", "neureality", "pliops", "proteantecs", "ceva",
-    "arm", "camtek"
+    "vayyar", "speedata", "hailo", "nextsilicon", "neureality",
+    "pliops", "proteantecs", "ceva", "arm"
 ]
 
 LEVER_COMPANIES = [
     "valens", "arbe"
 ]
 
-COMEET_COMPANIES = [
-    ("Nova", "nova")
-]
+COMEET_COMPANIES = []
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
