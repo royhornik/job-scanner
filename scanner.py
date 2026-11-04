@@ -54,7 +54,7 @@ def load_seen_jobs():
 def save_seen_jobs(seen_set):
     try:
         with open(SEEN_JOBS_FILE, "w", encoding="utf-8") as f:
-            json.dump(list(seen_set), f, indent=2, ensure_ascii=False)
+            json.dump(sorted(seen_set), f, indent=2, ensure_ascii=False)
     except Exception as e:
         print(f"Error saving seen jobs: {e}")
 
