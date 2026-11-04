@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 import json
 import time
@@ -31,6 +32,19 @@ LEVER_COMPANIES = [
 ]
 
 COMEET_COMPANIES = []
+
+# Only roles whose TITLE matches one of these patterns are reported
+RELEVANT_PATTERNS = [
+    r"\b(chip|asic|rtl|vlsi|soc|silicon|dft|dv|fpga|hw|hardware|embedded|firmware|fw)\b",
+    r"verification|validation|design for test|design engineer",
+    r"\b(digital|analog|mixed[- ]signal|physical design|layout|ic)\b",
+    r"electronic|electrical|\brf\b|\b(lab|laboratory)\b",
+    r"system integration|\b(board|pcb)\b|signal integrity|bring[- ]up|test engineer",
+]
+
+def is_relevant(title: str) -> bool:
+    t = title.lower()
+    return any(re.search(p, t) for p in RELEVANT_PATTERNS)
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -103,6 +117,8 @@ def scan_workday(company_name: str, tenant: str, slug: str, site: str):
                             "url": full_url,
                             "location": job.get("locationsText", "Israel")
                         })
+            else:
+                print(f"[Workday] {company_name} query '{query}': HTTP {response.status_code}")
         except Exception as e:
             print(f"[Workday] {company_name} query '{query}' error: {e}")
             
@@ -152,6 +168,7 @@ def scan_apple():
                     })
             print(f"[Apple] Found {len(matches)} matching positions.")
             return matches, True
+        print(f"[Apple] HTTP Error {response.status_code}")
         return [], False
     except Exception as e:
         print(f"[Apple] Error {e}")
@@ -178,6 +195,7 @@ def scan_greenhouse(company: str):
                     })
             print(f"[Greenhouse] {company}: Found {len(matches)} matching positions.")
             return matches, True
+        print(f"[Greenhouse] {company}: HTTP Error {response.status_code}")
         return [], False
     except Exception as e:
         print(f"[Greenhouse] {company}: Error {e}")
@@ -204,6 +222,7 @@ def scan_lever(company: str):
                     })
             print(f"[Lever] {company}: Found {len(matches)} matching positions.")
             return matches, True
+        print(f"[Lever] {company}: HTTP Error {response.status_code}")
         return [], False
     except Exception as e:
         print(f"[Lever] {company}: Error {e}")
@@ -229,6 +248,7 @@ def scan_comeet(company_name: str, company_uid: str):
                         })
             print(f"[Comeet] {company_name}: Found {len(matches)} matching positions.")
             return matches, True
+        print(f"[Comeet] {company_name}: HTTP Error {response.status_code}")
         return [], False
     except Exception as e:
         print(f"[Comeet] {company_name}: Error {e}")
@@ -272,6 +292,13 @@ def main():
         all_current_jobs.extend(jobs)
         if ok: success_count += 1
         time.sleep(0.1)
+
+    # keep only relevant roles, and log what was dropped so the filter can be tuned
+    relevant_jobs = [job for job in all_current_jobs if is_relevant(job["title"])]
+    for job in all_current_jobs:
+        if job not in relevant_jobs:
+            print(f"[filtered out] {job['company']} | {job['title']}")
+    all_current_jobs = relevant_jobs
 
     new_jobs = [job for job in all_current_jobs if job["url"] not in seen_urls]
     existing_jobs = [job for job in all_current_jobs if job["url"] in seen_urls]
