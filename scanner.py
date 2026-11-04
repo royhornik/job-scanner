@@ -78,6 +78,7 @@ def scan_workday(company_name: str, tenant: str, slug: str, site: str):
     url = f"https://{tenant}.myworkdayjobs.com/wday/cxs/{slug}/{site}/jobs"
     matches = []
     seen_ids = set()
+    ok = False   # becomes True only if at least one request really succeeded
     
     # חיפוש משולב: קודם לפי student בישראל, ואז בדיקה רחבה
     for query in ["student Israel", "intern Israel", "Israel"]:
@@ -86,6 +87,7 @@ def scan_workday(company_name: str, tenant: str, slug: str, site: str):
             response = requests.post(url, json=payload, headers=HEADERS, timeout=10)
             if response.status_code == 200:
                 data = response.json()
+                ok = True
                 for job in data.get("jobPostings", []):
                     job_path = job.get("externalPath", "")
                     if job_path in seen_ids:
@@ -109,7 +111,7 @@ def scan_workday(company_name: str, tenant: str, slug: str, site: str):
             print(f"[Workday] {company_name} query '{query}' error: {e}")
             
     print(f"[Workday] {company_name}: Found {len(matches)} matching positions.")
-    return matches, True
+    return matches, ok
 
 def scan_amazon():
     url = "https://www.amazon.jobs/en/search.json?country=ISR&base_query=student&result_limit=50"
