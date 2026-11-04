@@ -22,16 +22,21 @@ WORKDAY_COMPANIES = [
     ("Microchip", "microchiphr.wd5", "microchiphr", "external")
 ]
 
-GREENHOUSE_COMPANIES = [
-    "vayyar", "speedata", "hailo", "nextsilicon", "neureality",
-    "pliops", "proteantecs", "ceva", "arm"
-]
+# Greenhouse board names returned HTTP 404 for all of these companies (they do not use Greenhouse,
+# or the board name is different). Re-add each one only after checking its real careers system:
+#   vayyar, speedata, hailo, nextsilicon, neureality, pliops, proteantecs, ceva, arm
+GREENHOUSE_COMPANIES = []
 
-LEVER_COMPANIES = [
-    "valens", "arbe"
-]
+# (company, API host). Mobileye is on Lever's EU site: jobs.eu.lever.co -> api.eu.lever.co
+# "arbe" returned 404 and "valens" timed out once: valens is kept for one more run
+LEVER_COMPANIES = [("valens", "api.lever.co"), ("mobileye", "api.eu.lever.co")]
 
-COMEET_COMPANIES = []
+# Eightfold career sites (Qualcomm): (company, site host, domain)
+EIGHTFOLD_COMPANIES = [("Qualcomm", "careers.qualcomm.com", "qualcomm.com")]
+
+# (company, Comeet company uid, public token). The token is part of the company's PUBLIC careers
+# page (found in the browser Network tab), it is not a secret.
+COMEET_COMPANIES = [("Samsung", "D4.005", "4D518291CFE13540135413544D518291CFE")]
 
 # Only roles whose TITLE matches one of these patterns are reported
 RELEVANT_PATTERNS = [
@@ -201,8 +206,8 @@ def scan_greenhouse(company: str):
         print(f"[Greenhouse] {company}: Error {e}")
         return [], False
 
-def scan_lever(company: str):
-    url = f"https://api.lever.co/v0/postings/{company}?mode=json"
+def scan_lever(company: str, host: str = "api.lever.co"):
+    url = f"https://{host}/v0/postings/{company}?mode=json"
     matches = []
     try:
         response = requests.get(url, headers={"User-Agent": HEADERS["User-Agent"]}, timeout=10)
@@ -211,7 +216,7 @@ def scan_lever(company: str):
             for job in jobs:
                 title = job.get("text", "")
                 loc = job.get("categories", {}).get("location", "").lower()
-                is_israel = any(l in loc for l in ["israel", "tel aviv", "haifa"]) or not loc
+                is_israel = any(l in loc for l in ["israel", "tel aviv", "haifa", "jerusalem", "herzliya", "petah"]) or not loc
                 
                 if is_israel and any(kw in title.lower() for kw in KEYWORDS):
                     matches.append({
@@ -228,24 +233,28 @@ def scan_lever(company: str):
         print(f"[Lever] {company}: Error {e}")
         return [], False
 
-def scan_comeet(company_name: str, company_uid: str):
-    url = f"https://www.comeet.com/careers-api/2.0/company/{company_uid}/positions"
+def scan_comeet(company_name: str, company_uid: str, token: str):
+    url = f"https://www.comeet.co/careers-api/2.0/company/{company_uid}/positions"
+    params = {"token": token, "details": "false"}
     matches = []
     try:
-        response = requests.get(url, headers={"User-Agent": HEADERS["User-Agent"]}, timeout=10)
+        response = requests.get(url, params=params, headers={"User-Agent": HEADERS["User-Agent"]}, timeout=10)
         if response.status_code == 200:
             positions = response.json()
             for pos in positions:
                 title = pos.get("name", "")
-                loc = pos.get("location", {}).get("country", "").lower()
-                if "israel" in loc or not loc:
-                    if any(kw in title.lower() for kw in KEYWORDS):
-                        matches.append({
-                            "company": company_name,
-                            "title": title,
-                            "url": pos.get("url_active_page", ""),
-                            "location": pos.get("location", {}).get("city", "Israel")
-                        })
+                location = pos.get("location") or {}
+                country = (location.get("country") or "").lower()
+                loc_name = (location.get("name") or "").lower()
+                # Comeet may give "IL" (ISO code) or "Israel"
+                is_israel = country in ("il", "israel") or "israel" in loc_name or not country
+                if is_israel and any(kw in title.lower() for kw in KEYWORDS):
+                    matches.append({
+                        "company": company_name,
+                        "title": title,
+                        "url": pos.get("url_active_page") or pos.get("url_comeet_hosted_page", ""),
+                        "location": location.get("city") or location.get("name") or "Israel"
+                    })
             print(f"[Comeet] {company_name}: Found {len(matches)} matching positions.")
             return matches, True
         print(f"[Comeet] {company_name}: HTTP Error {response.status_code}")
@@ -254,12 +263,50 @@ def scan_comeet(company_name: str, company_uid: str):
         print(f"[Comeet] {company_name}: Error {e}")
         return [], False
 
+def scan_eightfold(company_name: str, host: str, domain: str):
+    """Eightfold careers sites expose a JSON search API at /api/apply/v2/jobs."""
+    matches = []
+    seen_ids = set()
+    ok = False
+    for query in ["student", "intern"]:
+        url = f"https://{host}/api/apply/v2/jobs"
+        params = {"domain": domain, "start": 0, "num": 50, "query": query,
+                  "location": "Israel", "sort_by": "relevance"}
+        try:
+            response = requests.get(url, params=params, headers={"User-Agent": HEADERS["User-Agent"]}, timeout=10)
+            if response.status_code != 200:
+                print(f"[Eightfold] {company_name} query '{query}': HTTP Error {response.status_code}")
+                continue
+            data = response.json()
+            if "positions" not in data:
+                print(f"[Eightfold] {company_name}: unexpected JSON keys {list(data.keys())}")
+                continue
+            ok = True
+            for pos in data["positions"]:
+                pos_id = pos.get("id")
+                if pos_id in seen_ids:
+                    continue
+                seen_ids.add(pos_id)
+                title = pos.get("name", "")
+                if any(kw in title.lower() for kw in KEYWORDS):
+                    matches.append({
+                        "company": company_name,
+                        "title": title,
+                        "url": pos.get("canonicalPositionUrl") or f"https://{host}/careers/job/{pos_id}",
+                        "location": pos.get("location", "Israel")
+                    })
+        except Exception as e:
+            print(f"[Eightfold] {company_name} query '{query}': Error {e}")
+    print(f"[Eightfold] {company_name}: Found {len(matches)} matching positions.")
+    return matches, ok
+
 def main():
     print("Starting hardware & semiconductor job scan...")
     seen_urls = load_seen_jobs()
     all_current_jobs = []
     success_count = 0
-    total = len(WORKDAY_COMPANIES) + len(GREENHOUSE_COMPANIES) + len(LEVER_COMPANIES) + len(COMEET_COMPANIES) + 2
+    total = (len(WORKDAY_COMPANIES) + len(GREENHOUSE_COMPANIES) + len(LEVER_COMPANIES)
+             + len(COMEET_COMPANIES) + len(EIGHTFOLD_COMPANIES) + 1)
 
     for comp_name, tenant, slug, site in WORKDAY_COMPANIES:
         jobs, ok = scan_workday(comp_name, tenant, slug, site)
@@ -271,24 +318,25 @@ def main():
     all_current_jobs.extend(jobs)
     if ok: success_count += 1
 
-    jobs, ok = scan_apple()
-    all_current_jobs.extend(jobs)
-    if ok: success_count += 1
-
     for comp in GREENHOUSE_COMPANIES:
         jobs, ok = scan_greenhouse(comp)
         all_current_jobs.extend(jobs)
         if ok: success_count += 1
         time.sleep(0.1)
 
-    for comp in LEVER_COMPANIES:
-        jobs, ok = scan_lever(comp)
+    for comp, host in LEVER_COMPANIES:
+        jobs, ok = scan_lever(comp, host)
         all_current_jobs.extend(jobs)
         if ok: success_count += 1
         time.sleep(0.1)
 
-    for comp_name, comp_uid in COMEET_COMPANIES:
-        jobs, ok = scan_comeet(comp_name, comp_uid)
+    for comp_name, host_name, domain in EIGHTFOLD_COMPANIES:
+        jobs, ok = scan_eightfold(comp_name, host_name, domain)
+        all_current_jobs.extend(jobs)
+        if ok: success_count += 1
+
+    for comp_name, comp_uid, comp_token in COMEET_COMPANIES:
+        jobs, ok = scan_comeet(comp_name, comp_uid, comp_token)
         all_current_jobs.extend(jobs)
         if ok: success_count += 1
         time.sleep(0.1)
