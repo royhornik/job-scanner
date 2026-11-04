@@ -22,17 +22,8 @@ WORKDAY_COMPANIES = [
     ("Microchip", "microchiphr.wd5", "microchiphr", "external")
 ]
 
-# Greenhouse board names returned HTTP 404 for all of these companies (they do not use Greenhouse,
-# or the board name is different). Re-add each one only after checking its real careers system:
-#   vayyar, speedata, hailo, nextsilicon, neureality, pliops, proteantecs, ceva, arm
-GREENHOUSE_COMPANIES = []
-
 # (company, API host). Mobileye is on Lever's EU site: jobs.eu.lever.co -> api.eu.lever.co
-# "arbe" returned 404 and "valens" timed out once: valens is kept for one more run
-LEVER_COMPANIES = [("valens", "api.lever.co"), ("mobileye", "api.eu.lever.co")]
-
-# Eightfold career sites (Qualcomm): (company, site host, domain)
-EIGHTFOLD_COMPANIES = [("Qualcomm", "careers.qualcomm.com", "qualcomm.com")]
+LEVER_COMPANIES = [("mobileye", "api.eu.lever.co")]
 
 # (company, Comeet company uid, public token). The token is part of the company's PUBLIC careers
 # page (found in the browser Network tab), it is not a secret.
@@ -154,58 +145,6 @@ def scan_amazon():
         print(f"[Amazon] Error {e}")
         return [], False
 
-def scan_apple():
-    url = "https://jobs.apple.com/api/v1/search/jobs?location=israel-ISR&sort=newest"
-    matches = []
-    try:
-        response = requests.get(url, headers={"User-Agent": HEADERS["User-Agent"]}, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            for job in data.get("searchResults", []):
-                title = job.get("postingTitle", "")
-                if any(kw in title.lower() for kw in KEYWORDS):
-                    job_id = job.get("id")
-                    matches.append({
-                        "company": "Apple",
-                        "title": title,
-                        "url": f"https://jobs.apple.com/he-il/details/{job_id}",
-                        "location": job.get("locations", [{}])[0].get("name", "Israel")
-                    })
-            print(f"[Apple] Found {len(matches)} matching positions.")
-            return matches, True
-        print(f"[Apple] HTTP Error {response.status_code}")
-        return [], False
-    except Exception as e:
-        print(f"[Apple] Error {e}")
-        return [], False
-
-def scan_greenhouse(company: str):
-    url = f"https://boards-api.greenhouse.io/v1/boards/{company}/jobs"
-    matches = []
-    try:
-        response = requests.get(url, headers={"User-Agent": HEADERS["User-Agent"]}, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            for job in data.get("jobs", []):
-                title = job.get("title", "")
-                loc_name = job.get("location", {}).get("name", "").lower()
-                is_israel = any(loc in loc_name for loc in ["israel", "tel aviv", "haifa", "beer", "rehovot", "yokneam"]) or not loc_name
-                
-                if is_israel and any(kw in title.lower() for kw in KEYWORDS):
-                    matches.append({
-                        "company": company.capitalize(),
-                        "title": title,
-                        "url": job.get("absolute_url"),
-                        "location": job.get("location", {}).get("name", "Israel")
-                    })
-            print(f"[Greenhouse] {company}: Found {len(matches)} matching positions.")
-            return matches, True
-        print(f"[Greenhouse] {company}: HTTP Error {response.status_code}")
-        return [], False
-    except Exception as e:
-        print(f"[Greenhouse] {company}: Error {e}")
-        return [], False
-
 def scan_lever(company: str, host: str = "api.lever.co"):
     url = f"https://{host}/v0/postings/{company}?mode=json"
     matches = []
@@ -263,50 +202,12 @@ def scan_comeet(company_name: str, company_uid: str, token: str):
         print(f"[Comeet] {company_name}: Error {e}")
         return [], False
 
-def scan_eightfold(company_name: str, host: str, domain: str):
-    """Eightfold careers sites expose a JSON search API at /api/apply/v2/jobs."""
-    matches = []
-    seen_ids = set()
-    ok = False
-    for query in ["student", "intern"]:
-        url = f"https://{host}/api/apply/v2/jobs"
-        params = {"domain": domain, "start": 0, "num": 50, "query": query,
-                  "location": "Israel", "sort_by": "relevance"}
-        try:
-            response = requests.get(url, params=params, headers={"User-Agent": HEADERS["User-Agent"]}, timeout=10)
-            if response.status_code != 200:
-                print(f"[Eightfold] {company_name} query '{query}': HTTP Error {response.status_code}")
-                continue
-            data = response.json()
-            if "positions" not in data:
-                print(f"[Eightfold] {company_name}: unexpected JSON keys {list(data.keys())}")
-                continue
-            ok = True
-            for pos in data["positions"]:
-                pos_id = pos.get("id")
-                if pos_id in seen_ids:
-                    continue
-                seen_ids.add(pos_id)
-                title = pos.get("name", "")
-                if any(kw in title.lower() for kw in KEYWORDS):
-                    matches.append({
-                        "company": company_name,
-                        "title": title,
-                        "url": pos.get("canonicalPositionUrl") or f"https://{host}/careers/job/{pos_id}",
-                        "location": pos.get("location", "Israel")
-                    })
-        except Exception as e:
-            print(f"[Eightfold] {company_name} query '{query}': Error {e}")
-    print(f"[Eightfold] {company_name}: Found {len(matches)} matching positions.")
-    return matches, ok
-
 def main():
     print("Starting hardware & semiconductor job scan...")
     seen_urls = load_seen_jobs()
     all_current_jobs = []
     success_count = 0
-    total = (len(WORKDAY_COMPANIES) + len(GREENHOUSE_COMPANIES) + len(LEVER_COMPANIES)
-             + len(COMEET_COMPANIES) + len(EIGHTFOLD_COMPANIES) + 1)
+    total = len(WORKDAY_COMPANIES) + len(LEVER_COMPANIES) + len(COMEET_COMPANIES) + 1   # +1 = Amazon
 
     for comp_name, tenant, slug, site in WORKDAY_COMPANIES:
         jobs, ok = scan_workday(comp_name, tenant, slug, site)
@@ -318,22 +219,11 @@ def main():
     all_current_jobs.extend(jobs)
     if ok: success_count += 1
 
-    for comp in GREENHOUSE_COMPANIES:
-        jobs, ok = scan_greenhouse(comp)
-        all_current_jobs.extend(jobs)
-        if ok: success_count += 1
-        time.sleep(0.1)
-
     for comp, host in LEVER_COMPANIES:
         jobs, ok = scan_lever(comp, host)
         all_current_jobs.extend(jobs)
         if ok: success_count += 1
         time.sleep(0.1)
-
-    for comp_name, host_name, domain in EIGHTFOLD_COMPANIES:
-        jobs, ok = scan_eightfold(comp_name, host_name, domain)
-        all_current_jobs.extend(jobs)
-        if ok: success_count += 1
 
     for comp_name, comp_uid, comp_token in COMEET_COMPANIES:
         jobs, ok = scan_comeet(comp_name, comp_uid, comp_token)
